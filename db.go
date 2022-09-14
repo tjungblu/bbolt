@@ -40,6 +40,9 @@ const (
 // default page size for db is set to the OS page size.
 var defaultPageSize = os.Getpagesize()
 
+// Vectorized writes are available on Unix, this allows to switch by OS
+var vectorizedWritesAvailable = true
+
 // The time elapsed between consecutive file locking attempts.
 const flockRetryTimeout = 50 * time.Millisecond
 
@@ -74,6 +77,10 @@ type DB struct {
 	//
 	// THIS IS UNSAFE. PLEASE USE WITH CAUTION.
 	NoSync bool
+
+	// Setting the VectorizedWrites flag will use the pwritev syscall to
+	// write dirty pages in a few vectorized write instead of many small writes.
+	VectorizedWrites bool
 
 	// When true, skips syncing freelist to disk. This improves the database
 	// write performance under normal operation, but requires a full database
@@ -190,6 +197,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		options = DefaultOptions
 	}
 	db.NoSync = options.NoSync
+	db.VectorizedWrites = options.VectorizedWrites
 	db.NoGrowSync = options.NoGrowSync
 	db.MmapFlags = options.MmapFlags
 	db.NoFreelistSync = options.NoFreelistSync
@@ -1114,6 +1122,10 @@ type Options struct {
 	// is useful in APIs which expose Options but not the underlying DB.
 	NoSync bool
 
+	// VectorizedWrites will use the pwritev syscall to
+	// write dirty pages in a few vectorized write instead of many small writes.
+	VectorizedWrites bool
+
 	// OpenFile is used to open files. It defaults to os.OpenFile. This option
 	// is useful for writing hermetic tests.
 	OpenFile func(string, int, os.FileMode) (*os.File, error)
@@ -1127,9 +1139,10 @@ type Options struct {
 // DefaultOptions represent the options used if nil options are passed into Open().
 // No timeout is used which will cause Bolt to wait indefinitely for a lock.
 var DefaultOptions = &Options{
-	Timeout:      0,
-	NoGrowSync:   false,
-	FreelistType: FreelistArrayType,
+	Timeout:          0,
+	NoGrowSync:       false,
+	FreelistType:     FreelistArrayType,
+	VectorizedWrites: vectorizedWritesAvailable,
 }
 
 // Stats represents statistics about the database.

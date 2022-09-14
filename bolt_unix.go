@@ -85,3 +85,21 @@ func munmap(db *DB) error {
 	db.datasz = 0
 	return err
 }
+
+func pwritev(fd uintptr, iovecs []syscall.Iovec, offset uint64) (uintptr, error) {
+	var (
+		r uintptr
+		e syscall.Errno
+	)
+	for {
+		r, _, e = syscall.Syscall6(syscall.SYS_PWRITEV, fd,
+			uintptr(unsafe.Pointer(&iovecs[0])), uintptr(len(iovecs)), uintptr(offset), 0, 0)
+		if e != syscall.EINTR {
+			break
+		}
+	}
+	if e != 0 {
+		return r, e
+	}
+	return r, nil
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 )
@@ -145,8 +146,6 @@ func (tx *Tx) Commit() error {
 	} else if !tx.writable {
 		return ErrTxNotWritable
 	}
-
-	// TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
 
 	// Rebalance nodes which have had deletions.
 	var startTime = time.Now()
@@ -521,35 +520,74 @@ func (tx *Tx) write() error {
 	sort.Sort(pages)
 
 	// Write pages to disk in order.
-	for _, p := range pages {
-		rem := (uint64(p.overflow) + 1) * uint64(tx.db.pageSize)
-		offset := int64(p.id) * int64(tx.db.pageSize)
-		var written uintptr
+	if tx.db.VectorizedWrites && len(pages) > 0 {
+		var offsets []uint64
+		var iovecs [][]syscall.Iovec
 
-		// Write out page in "max allocation" sized chunks.
-		for {
-			sz := rem
-			if sz > maxAllocSize-1 {
-				sz = maxAllocSize - 1
+		// TODO: read from this from sysconf(_SC_IOV_MAX)?
+		// linux and darwin default is 1024
+		const maxVec = 1024
+
+		lastPid := pages[0].id - 1
+		begin := 0
+		var curVecs []syscall.Iovec
+		for i := 0; i < len(pages); i++ {
+			p := pages[i]
+			if p.id != (lastPid+1) || len(curVecs) >= maxVec {
+				offsets = append(offsets, uint64(pages[begin].id)*uint64(tx.db.pageSize))
+				iovecs = append(iovecs, curVecs)
+
+				begin = i
+				curVecs = []syscall.Iovec{}
 			}
-			buf := unsafeByteSlice(unsafe.Pointer(p), written, 0, int(sz))
+			curVecs = append(curVecs, syscall.Iovec{
+				Base: (*byte)(unsafe.Pointer(p)),
+				Len:  (uint64(p.overflow) + 1) * uint64(tx.db.pageSize),
+			})
+			lastPid = p.id
+		}
 
-			if _, err := tx.db.ops.writeAt(buf, offset); err != nil {
+		if len(curVecs) > 0 {
+			offsets = append(offsets, uint64(pages[begin].id)*uint64(tx.db.pageSize))
+			iovecs = append(iovecs, curVecs)
+		}
+
+		for i := 0; i < len(offsets); i++ {
+			if _, err := pwritev(tx.db.file.Fd(), iovecs[i], offsets[i]); err != nil {
 				return err
 			}
+		}
+	} else {
+		for _, p := range pages {
+			rem := (uint64(p.overflow) + 1) * uint64(tx.db.pageSize)
+			offset := int64(p.id) * int64(tx.db.pageSize)
+			var written uintptr
 
-			// Update statistics.
-			tx.stats.Write++
+			// Write out page in "max allocation" sized chunks.
+			for {
+				sz := rem
+				if sz > maxAllocSize-1 {
+					sz = maxAllocSize - 1
+				}
+				buf := unsafeByteSlice(unsafe.Pointer(p), written, 0, int(sz))
 
-			// Exit inner for loop if we've written all the chunks.
-			rem -= sz
-			if rem == 0 {
-				break
+				if _, err := tx.db.ops.writeAt(buf, offset); err != nil {
+					return err
+				}
+
+				// Update statistics.
+				tx.stats.Write++
+
+				// Exit inner for loop if we've written all the chunks.
+				rem -= sz
+				if rem == 0 {
+					break
+				}
+
+				// Otherwise move offset forward and move pointer to next chunk.
+				offset += int64(sz)
+				written += uintptr(sz)
 			}
-
-			// Otherwise move offset forward and move pointer to next chunk.
-			offset += int64(sz)
-			written += uintptr(sz)
 		}
 	}
 

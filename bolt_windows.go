@@ -10,6 +10,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func init() {
+	vectorizedWritesAvailable = false
+}
+
 // fdatasync flushes written data to a file descriptor.
 func fdatasync(db *DB) error {
 	return db.file.Sync()
