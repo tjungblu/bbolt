@@ -31,7 +31,7 @@ func createDb(t *testing.T) (*DB, func()) {
 }
 
 func createAndPutKeys(t *testing.T) {
-	t.Parallel()
+	//t.Parallel()
 
 	db, cleanup := createDb(t)
 	defer cleanup()

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // txid represents the internal transaction identifier.
@@ -520,41 +522,41 @@ func (tx *Tx) write() error {
 
 	// Write pages to disk in order.
 	if tx.db.VectorizedWrites && len(pages) > 0 {
-		var offsets []uint64
-		var iovecs [][]Iovec
+		var offsets []int64
+		var iovecs [][]byte
 
-		// TODO: read from this from sysconf(_SC_IOV_MAX)?
-		// linux and darwin default is 1024
-		const maxVec = 1024
-
-		lastPid := pages[0].id - 1
 		begin := 0
-		var curVecs []Iovec
+		var curVecs []byte
+		var lastPageEnding unsafe.Pointer
 		for i := 0; i < len(pages); i++ {
 			p := pages[i]
-			if p.id != (lastPid+1) || len(curVecs) >= maxVec {
-				offsets = append(offsets, uint64(pages[begin].id)*uint64(tx.db.pageSize))
-				iovecs = append(iovecs, curVecs)
+			pp := unsafe.Pointer(p)
 
+			if lastPageEnding != pp {
+				if len(curVecs) > 0 {
+					offsets = append(offsets, int64(pages[begin].id)*int64(tx.db.pageSize))
+					iovecs = append(iovecs, curVecs)
+				}
+
+				curVecs = p.bytes(uint64(tx.db.pageSize))
 				begin = i
-				curVecs = []Iovec{}
+			} else {
+				curVecs = append(curVecs, p.bytes(uint64(tx.db.pageSize))...)
 			}
-			curVecs = append(curVecs, Iovec{
-				Base: uintptr(unsafe.Pointer(p)),
-				Len:  (uint64(p.overflow) + 1) * uint64(tx.db.pageSize),
-			})
-			lastPid = p.id
+			lastPageEnding = unsafe.Add(unsafe.Pointer(p), (uint64(p.overflow)+1)*uint64(tx.db.pageSize))
 		}
 
 		if len(curVecs) > 0 {
-			offsets = append(offsets, uint64(pages[begin].id)*uint64(tx.db.pageSize))
+			offsets = append(offsets, int64(pages[begin].id)*int64(tx.db.pageSize))
 			iovecs = append(iovecs, curVecs)
 		}
 
 		for i := 0; i < len(offsets); i++ {
-			if _, err := pwritev(tx.db.file.Fd(), iovecs[i], offsets[i]); err != nil {
+			// TODO this needs to be wrapped in bolt_OS.go
+			if _, err := unix.Pwritev(int(tx.db.file.Fd()), [][]byte{iovecs[i]}, offsets[i]); err != nil {
 				return err
 			}
+			tx.stats.Write++
 		}
 	} else {
 		for _, p := range pages {

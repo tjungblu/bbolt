@@ -34,6 +34,10 @@ type page struct {
 	overflow uint32
 }
 
+func (p *page) bytes(pageSize uint64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(p)), (uint64(p.overflow)+1)*pageSize)
+}
+
 // typ returns a human readable page type string used for debugging.
 func (p *page) typ() string {
 	if (p.flags & branchPageFlag) != 0 {
