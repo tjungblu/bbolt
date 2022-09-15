@@ -12,6 +12,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type Iovec struct {
+	Base uintptr
+	Len  uint64
+}
+
 // flock acquires an advisory lock on a file descriptor.
 func flock(db *DB, exclusive bool, timeout time.Duration) error {
 	var t time.Time
@@ -86,7 +91,7 @@ func munmap(db *DB) error {
 	return err
 }
 
-func pwritev(fd uintptr, iovecs []syscall.Iovec, offset uint64) (uintptr, error) {
+func pwritev(fd uintptr, iovecs []Iovec, offset uint64) (uintptr, error) {
 	var (
 		r uintptr
 		e syscall.Errno

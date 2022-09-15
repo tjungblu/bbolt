@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -522,7 +521,7 @@ func (tx *Tx) write() error {
 	// Write pages to disk in order.
 	if tx.db.VectorizedWrites && len(pages) > 0 {
 		var offsets []uint64
-		var iovecs [][]syscall.Iovec
+		var iovecs [][]Iovec
 
 		// TODO: read from this from sysconf(_SC_IOV_MAX)?
 		// linux and darwin default is 1024
@@ -530,7 +529,7 @@ func (tx *Tx) write() error {
 
 		lastPid := pages[0].id - 1
 		begin := 0
-		var curVecs []syscall.Iovec
+		var curVecs []Iovec
 		for i := 0; i < len(pages); i++ {
 			p := pages[i]
 			if p.id != (lastPid+1) || len(curVecs) >= maxVec {
@@ -538,10 +537,10 @@ func (tx *Tx) write() error {
 				iovecs = append(iovecs, curVecs)
 
 				begin = i
-				curVecs = []syscall.Iovec{}
+				curVecs = []Iovec{}
 			}
-			curVecs = append(curVecs, syscall.Iovec{
-				Base: (*byte)(unsafe.Pointer(p)),
+			curVecs = append(curVecs, Iovec{
+				Base: uintptr(unsafe.Pointer(p)),
 				Len:  (uint64(p.overflow) + 1) * uint64(tx.db.pageSize),
 			})
 			lastPid = p.id
