@@ -12,6 +12,53 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// pwritev writes the given pages using vectorized io. The pages must be sorted by their id indicating their sequence.
+// The logic identifies runs of consecutive pages that are written with vectorized io using the pwritev syscall.
+func pwritev(db *DB, pages []*page) error {
+	if len(pages) == 0 {
+		return nil
+	}
+
+	offsets, iovecs := pagesToIovec2(db, pages)
+	for i := 0; i < len(offsets); i++ {
+		if _, err := unix.Pwritev(int(db.file.Fd()), iovecs[i], offsets[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pagesToIovec2(db *DB, pages []*page) ([]int64, [][][]byte) {
+	var offsets []int64
+	var iovecs [][][]byte
+
+	// TODO: read from this from sysconf(_SC_IOV_MAX)?
+	// linux and darwin default is 1024
+	const maxVec = 1024
+
+	lastPid := pages[0].id - 1
+	begin := 0
+	var curVecs [][]byte
+	for i := 0; i < len(pages); i++ {
+		p := pages[i]
+		if p.id != (lastPid+1) || len(curVecs) >= maxVec {
+			offsets = append(offsets, int64(pages[begin].id)*int64(db.pageSize))
+			iovecs = append(iovecs, curVecs)
+
+			begin = i
+			curVecs = [][]byte{}
+		}
+		curVecs = append(curVecs, p.bytes(uint64(db.pageSize)))
+		lastPid = p.id + pgid(p.overflow)
+	}
+
+	if len(curVecs) > 0 {
+		offsets = append(offsets, int64(pages[begin].id)*int64(db.pageSize))
+		iovecs = append(iovecs, curVecs)
+	}
+	return offsets, iovecs
+}
+
 // flock acquires an advisory lock on a file descriptor.
 func flock(db *DB, exclusive bool, timeout time.Duration) error {
 	var t time.Time

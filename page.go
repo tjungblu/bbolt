@@ -53,6 +53,10 @@ func (p *page) meta() *meta {
 	return (*meta)(unsafeAdd(unsafe.Pointer(p), unsafe.Sizeof(*p)))
 }
 
+func (p *page) bytes(pageSize uint64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(p)), (uint64(p.overflow)+1)*pageSize)
+}
+
 // leafPageElement retrieves the leaf node by index
 func (p *page) leafPageElement(index uint16) *leafPageElement {
 	return (*leafPageElement)(unsafeIndex(unsafe.Pointer(p), unsafe.Sizeof(*p),

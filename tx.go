@@ -511,47 +511,25 @@ func (tx *Tx) allocate(count int) (*page, error) {
 
 // write writes any dirty pages to disk.
 func (tx *Tx) write() error {
+	if len(tx.pages) == 0 {
+		return nil
+	}
+
 	// Sort pages by id.
 	pages := make(pages, 0, len(tx.pages))
 	for _, p := range tx.pages {
 		pages = append(pages, p)
 	}
-	// Clear out page cache early.
-	tx.pages = make(map[pgid]*page)
 	sort.Sort(pages)
 
-	// Write pages to disk in order.
-	for _, p := range pages {
-		rem := (uint64(p.overflow) + 1) * uint64(tx.db.pageSize)
-		offset := int64(p.id) * int64(tx.db.pageSize)
-		var written uintptr
-
-		// Write out page in "max allocation" sized chunks.
-		for {
-			sz := rem
-			if sz > maxAllocSize-1 {
-				sz = maxAllocSize - 1
-			}
-			buf := unsafeByteSlice(unsafe.Pointer(p), written, 0, int(sz))
-
-			if _, err := tx.db.ops.writeAt(buf, offset); err != nil {
-				return err
-			}
-
-			// Update statistics.
-			tx.stats.Write++
-
-			// Exit inner for loop if we've written all the chunks.
-			rem -= sz
-			if rem == 0 {
-				break
-			}
-
-			// Otherwise move offset forward and move pointer to next chunk.
-			offset += int64(sz)
-			written += uintptr(sz)
-		}
+	// Clear out page cache early.
+	tx.pages = make(map[pgid]*page)
+	// Write pages to disk.
+	if err := pwritev(tx.db, pages); err != nil {
+		return err
 	}
+
+	tx.stats.Write++
 
 	// Ignore file sync if flag is set on DB.
 	if !tx.db.NoSync || IgnoreNoSync {
