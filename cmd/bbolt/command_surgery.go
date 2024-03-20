@@ -29,6 +29,7 @@ func newSurgeryCobraCommand() *cobra.Command {
 	surgeryCmd.AddCommand(newSurgeryClearPageElementsCommand())
 	surgeryCmd.AddCommand(newSurgeryFreelistCommand())
 	surgeryCmd.AddCommand(newSurgeryMetaCommand())
+	surgeryCmd.AddCommand(newSurgeryBucketsCommand())
 
 	return surgeryCmd
 }
