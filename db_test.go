@@ -44,6 +44,66 @@ type meta struct {
 	_       uint64
 }
 
+func TestSupportCase(t *testing.T) {
+	src := "/home/tjungblu/Downloads/support_03777939/compacted_dst.db"
+	os.Remove("sized.txt")
+	fx, err := os.Create("sized.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer fx.Close()
+	fx.WriteString("bucket\tkey\tksize\tvsize\n")
+
+	db, err := bolt.Open(src, 0600, &bolt.Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kvPairs := 0
+	kBytes := 0
+	vBytes := 0
+	err = db.View(func(tx *bolt.Tx) error {
+		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			return b.ForEach(func(k, v []byte) error {
+				kvPairs += 1
+				kBytes += len(k)
+				vBytes += len(v)
+
+				sk := string(k)
+				if string(name) == "key" {
+					rev := bytesToRev(k)
+					sk = fmt.Sprintf("main=%d,sub=%d", rev.main, rev.sub)
+				}
+
+				fx.WriteString(fmt.Sprintf("%s\t%s\t%d\t%d\n", string(name), sk, len(k), len(v)))
+				return nil
+			})
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("%d kv pairs, %d key kiB, %d value MiB", kvPairs, kBytes/1024, vBytes/1024/1024)
+
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type revision struct {
+	main int64
+	sub  int64
+}
+
+func bytesToRev(bytes []byte) revision {
+	return revision{
+		main: int64(binary.BigEndian.Uint64(bytes[0:8])),
+		sub:  int64(binary.BigEndian.Uint64(bytes[9:])),
+	}
+}
+
 // Ensure that a database can be opened without error.
 func TestOpen(t *testing.T) {
 	path := tempfile()

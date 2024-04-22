@@ -11,7 +11,7 @@ import (
 
 func newOmitValuesCobraCommand() *cobra.Command {
 	omitValuesCmd := &cobra.Command{
-		Use:   "omitval",
+		Use:   "omitval2",
 		Short: "removes all values in the given database file and stores it in the destination",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -32,7 +32,6 @@ func omitFunc(srcDBPath, destination string) error {
 	}
 
 	logger := bolt.DefaultLogger{Logger: log.Default()}
-	logger.EnableDebug()
 	db, err := bolt.Open(destination, 0600, &bolt.Options{Logger: &logger})
 	if err != nil {
 		return err
@@ -42,16 +41,29 @@ func omitFunc(srcDBPath, destination string) error {
 	// replace all values with an empty (1 filled) byte slice of same size, we have to do it twice,
 	// since each transaction keeps a copy of the last pages around for recovery
 	for i := 0; i < 2; i++ {
-
 		err = db.Update(func(tx *bolt.Tx) error {
-			for _, bucket := range []string{"key", "lease"} {
+			for _, bucket := range []string{"key"} {
 				b := tx.Bucket([]byte(bucket))
 				err = b.ForEach(func(k, v []byte) error {
-					ones := make([]byte, len(v))
-					for j := 0; j < len(v); j++ {
+					kv := &KeyValue{}
+					err := kv.Unmarshal(v)
+					if err != nil {
+						return fmt.Errorf("unmarshal failed: %w", err)
+					}
+
+					// wipe only the actual value, so we can reconstruct the rest of the lineage
+					ones := make([]byte, len(kv.Value))
+					for j := 0; j < len(kv.Value); j++ {
 						ones[j] = 1
 					}
-					return b.Put(k, ones)
+					kv.Value = ones
+
+					marshalled, err := kv.Marshal()
+					if err != nil {
+						return fmt.Errorf("marshal failed: %w", err)
+					}
+
+					return b.Put(k, marshalled)
 				})
 				if err != nil {
 					return err
