@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"runtime"
 	"sort"
 	"strings"
@@ -270,6 +271,19 @@ func (tx *Tx) Commit() (err error) {
 		return err
 	}
 	tx.stats.IncWriteTime(time.Since(startTime))
+
+	dbpath := path.Join(path.Dir(tx.db.path), "fx.seq")
+	f, err := os.OpenFile(dbpath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("opening fx.seq: %w", err)
+	}
+	defer f.Close()
+
+	bset := PageUsageOverview(tx)
+	_, err = bset.WriteTo(f)
+	if err != nil {
+		return fmt.Errorf("writing to fx.seq: %w", err)
+	}
 
 	// Finalize the transaction.
 	tx.close()
