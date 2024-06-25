@@ -13,6 +13,7 @@ import (
 
 	berrors "go.etcd.io/bbolt/errors"
 	"go.etcd.io/bbolt/internal/common"
+	fl "go.etcd.io/bbolt/internal/freelist"
 )
 
 // The time elapsed between consecutive file locking attempts.
@@ -134,8 +135,9 @@ type DB struct {
 	rwtx     *Tx
 	txs      []*Tx
 
-	freelist     *freelist
-	freelistLoad sync.Once
+	freelist           fl.Freelist
+	freelistSerializer fl.Serializable
+	freelistLoad       sync.Once
 
 	pagePool sync.Pool
 
@@ -190,6 +192,7 @@ func Open(path string, mode os.FileMode, options *Options) (db *DB, err error) {
 	db.NoFreelistSync = options.NoFreelistSync
 	db.PreLoadFreelist = options.PreLoadFreelist
 	db.FreelistType = options.FreelistType
+	db.freelistSerializer = fl.Serializer{}
 	db.Mlock = options.Mlock
 
 	// Set default values for later DB operations.
@@ -419,12 +422,13 @@ func (db *DB) loadFreelist() {
 		db.freelist = newFreelist(db.FreelistType)
 		if !db.hasSyncedFreelist() {
 			// Reconstruct free list by scanning the DB.
-			db.freelist.readIDs(db.freepages())
+			db.freelist.Init(db.freepages())
 		} else {
 			// Read free list from freelist page.
-			db.freelist.read(db.page(db.meta().Freelist()))
+			db.freelistSerializer.Read(db.freelist, db.page(db.meta().Freelist()))
 		}
-		db.stats.FreePageN = db.freelist.free_count()
+		db.stats.FreePageN = db.freelist.FreeCount()
+		db.stats.PendingPageN = db.freelist.PendingCount()
 	})
 }
 
@@ -854,14 +858,14 @@ func (db *DB) freePages() {
 		minid = db.txs[0].meta.Txid()
 	}
 	if minid > 0 {
-		db.freelist.release(minid - 1)
+		db.freelist.Release(minid - 1)
 	}
 	// Release unused txid extents.
 	for _, t := range db.txs {
-		db.freelist.releaseRange(minid, t.meta.Txid()-1)
+		db.freelist.ReleaseRange(minid, t.meta.Txid()-1)
 		minid = t.meta.Txid() + 1
 	}
-	db.freelist.releaseRange(minid, common.Txid(0xFFFFFFFFFFFFFFFF))
+	db.freelist.ReleaseRange(minid, common.Txid(0xFFFFFFFFFFFFFFFF))
 	// Any page both allocated and freed in an extent is safe to release.
 }
 
@@ -1176,7 +1180,7 @@ func (db *DB) allocate(txid common.Txid, count int) (*common.Page, error) {
 	p.SetOverflow(uint32(count - 1))
 
 	// Use pages from the freelist if they are available.
-	p.SetId(db.freelist.allocate(txid, count))
+	p.SetId(db.freelist.Allocate(txid, count))
 	if p.Id() != 0 {
 		return p, nil
 	}
@@ -1280,6 +1284,13 @@ func (db *DB) freepages() []common.Pgid {
 		}
 	}
 	return fids
+}
+
+func newFreelist(freelistType FreelistType) fl.Freelist {
+	if freelistType == FreelistMapType {
+		return fl.NewHashMap()
+	}
+	return fl.NewArray()
 }
 
 // Options represents the options that can be set when opening a database.
