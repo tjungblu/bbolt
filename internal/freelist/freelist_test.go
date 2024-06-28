@@ -226,10 +226,10 @@ func Test_freelist_ReadIDs_and_getFreePageIDs(t *testing.T) {
 }
 
 // newTestFreelist get the freelist type from env and initial the freelist
-func newTestFreelist() Freelist {
+func newTestFreelist() Interface {
 	if env := os.Getenv(TestFreelistType); env == "map" {
-		return NewHashMap()
+		return NewHashMapFreelist()
 	}
 
-	return NewArray()
+	return NewArrayFreelist()
 }

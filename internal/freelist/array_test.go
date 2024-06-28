@@ -9,7 +9,7 @@ import (
 
 // Ensure that a freelist can find contiguous blocks of pages.
 func TestFreelistArray_allocate(t *testing.T) {
-	f := NewArray()
+	f := NewArrayFreelist()
 	ids := []common.Pgid{3, 4, 5, 6, 7, 9, 12, 13, 18}
 	f.Init(ids)
 	if id := int(f.Allocate(1, 3)); id != 3 {

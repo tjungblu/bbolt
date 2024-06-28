@@ -7,18 +7,18 @@ import (
 	"go.etcd.io/bbolt/internal/common"
 )
 
-type Array struct {
+type array struct {
 	shared
 
 	ids []common.Pgid // all free and available free page ids.
 }
 
-func (f *Array) Init(ids common.Pgids) {
+func (f *array) Init(ids common.Pgids) {
 	f.ids = ids
 	f.reindex(f.FreePageIds(), f.pendingPageIds())
 }
 
-func (f *Array) Allocate(txid common.Txid, n int) common.Pgid {
+func (f *array) Allocate(txid common.Txid, n int) common.Pgid {
 	if len(f.ids) == 0 {
 		return 0
 	}
@@ -60,19 +60,19 @@ func (f *Array) Allocate(txid common.Txid, n int) common.Pgid {
 	return 0
 }
 
-func (f *Array) Count() int {
+func (f *array) Count() int {
 	return f.FreeCount() + f.PendingCount()
 }
 
-func (f *Array) FreeCount() int {
+func (f *array) FreeCount() int {
 	return len(f.ids)
 }
 
-func (f *Array) FreePageIds() common.Pgids {
+func (f *array) FreePageIds() common.Pgids {
 	return f.ids
 }
 
-func (f *Array) mergeSpans(ids common.Pgids) {
+func (f *array) mergeSpans(ids common.Pgids) {
 	sort.Sort(ids)
 	common.Verify(func() {
 		idsIdx := make(map[common.Pgid]struct{})
@@ -102,8 +102,8 @@ func (f *Array) mergeSpans(ids common.Pgids) {
 	f.ids = common.Pgids(f.ids).Merge(ids)
 }
 
-func NewArray() *Array {
-	a := &Array{
+func NewArrayFreelist() Interface {
+	a := &array{
 		shared: shared{
 			pending: make(map[common.Txid]*txPending),
 			allocs:  make(map[common.Pgid]common.Txid),

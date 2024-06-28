@@ -6,7 +6,7 @@ import (
 	"go.etcd.io/bbolt/internal/common"
 )
 
-type Freelist interface {
+type Interface interface {
 	// Init initializes this freelist with the given list of pages.
 	Init(ids common.Pgids)
 
@@ -48,7 +48,7 @@ type Freelist interface {
 
 // Copyall copies a list of all free ids and all pending ids in one sorted list.
 // f.count returns the minimum length required for dst.
-func Copyall(f Freelist, dst []common.Pgid) {
+func Copyall(f Interface, dst []common.Pgid) {
 	m := make(common.Pgids, 0, f.PendingCount())
 	for _, txp := range f.pendingPageIds() {
 		m = append(m, txp.ids...)
@@ -58,13 +58,13 @@ func Copyall(f Freelist, dst []common.Pgid) {
 }
 
 // Reload reads the freelist from a page and filters out pending items.
-func Reload(s Serializable, f Freelist, p *common.Page) {
+func Reload(s Serializable, f Interface, p *common.Page) {
 	s.Read(f, p)
 	NoSyncReload(f, p.FreelistPageIds())
 }
 
 // NoSyncReload reads the freelist from Pgids and filters out pending items.
-func NoSyncReload(f Freelist, pgIds common.Pgids) {
+func NoSyncReload(f Interface, pgIds common.Pgids) {
 	// Build a cache of only pending pages.
 	pcache := make(map[common.Pgid]bool)
 	for _, txp := range f.pendingPageIds() {
@@ -76,7 +76,7 @@ func NoSyncReload(f Freelist, pgIds common.Pgids) {
 	// Check each page in the freelist and build a new available freelist
 	// with any pages not in the pending lists.
 	var a []common.Pgid
-	for _, id := range f.FreePageIds() {
+	for _, id := range pgIds {
 		if !pcache[id] {
 			a = append(a, id)
 		}

@@ -135,7 +135,7 @@ type DB struct {
 	rwtx     *Tx
 	txs      []*Tx
 
-	freelist           fl.Freelist
+	freelist           fl.Interface
 	freelistSerializer fl.Serializable
 	freelistLoad       sync.Once
 
@@ -1286,11 +1286,11 @@ func (db *DB) freepages() []common.Pgid {
 	return fids
 }
 
-func newFreelist(freelistType FreelistType) fl.Freelist {
+func newFreelist(freelistType FreelistType) fl.Interface {
 	if freelistType == FreelistMapType {
-		return fl.NewHashMap()
+		return fl.NewHashMapFreelist()
 	}
-	return fl.NewArray()
+	return fl.NewArrayFreelist()
 }
 
 // Options represents the options that can be set when opening a database.

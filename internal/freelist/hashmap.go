@@ -11,7 +11,7 @@ import (
 // pidSet holds the set of starting pgids which have the same span size
 type pidSet map[common.Pgid]struct{}
 
-type HashMap struct {
+type hashMap struct {
 	shared
 
 	freePagesCount uint64                 // count of free pages(hashmap version)
@@ -20,7 +20,7 @@ type HashMap struct {
 	backwardMap    map[common.Pgid]uint64 // key is end pgid, value is its span size
 }
 
-func (f *HashMap) Init(pgids common.Pgids) {
+func (f *hashMap) Init(pgids common.Pgids) {
 	if len(pgids) == 0 {
 		return
 	}
@@ -58,7 +58,7 @@ func (f *HashMap) Init(pgids common.Pgids) {
 	f.reindex(f.FreePageIds(), f.pendingPageIds())
 }
 
-func (f *HashMap) Allocate(txid common.Txid, n int) common.Pgid {
+func (f *hashMap) Allocate(txid common.Txid, n int) common.Pgid {
 	if n == 0 {
 		return 0
 	}
@@ -105,11 +105,11 @@ func (f *HashMap) Allocate(txid common.Txid, n int) common.Pgid {
 	return 0
 }
 
-func (f *HashMap) Count() int {
+func (f *hashMap) Count() int {
 	return f.FreeCount() + f.PendingCount()
 }
 
-func (f *HashMap) FreeCount() int {
+func (f *hashMap) FreeCount() int {
 	common.Verify(func() {
 		expectedFreePageCount := f.hashmapFreeCountSlow()
 		common.Assert(int(f.freePagesCount) == expectedFreePageCount,
@@ -118,7 +118,7 @@ func (f *HashMap) FreeCount() int {
 	return int(f.freePagesCount)
 }
 
-func (f *HashMap) FreePageIds() common.Pgids {
+func (f *hashMap) FreePageIds() common.Pgids {
 	count := f.FreeCount()
 	if count == 0 {
 		return nil
@@ -143,7 +143,7 @@ func (f *HashMap) FreePageIds() common.Pgids {
 	return m
 }
 
-func (f *HashMap) hashmapFreeCountSlow() int {
+func (f *hashMap) hashmapFreeCountSlow() int {
 	count := 0
 	for _, size := range f.forwardMap {
 		count += int(size)
@@ -151,7 +151,7 @@ func (f *HashMap) hashmapFreeCountSlow() int {
 	return count
 }
 
-func (f *HashMap) addSpan(start common.Pgid, size uint64) {
+func (f *hashMap) addSpan(start common.Pgid, size uint64) {
 	f.backwardMap[start-1+common.Pgid(size)] = size
 	f.forwardMap[start] = size
 	if _, ok := f.freemaps[size]; !ok {
@@ -162,7 +162,7 @@ func (f *HashMap) addSpan(start common.Pgid, size uint64) {
 	f.freePagesCount += size
 }
 
-func (f *HashMap) delSpan(start common.Pgid, size uint64) {
+func (f *hashMap) delSpan(start common.Pgid, size uint64) {
 	delete(f.forwardMap, start)
 	delete(f.backwardMap, start+common.Pgid(size-1))
 	delete(f.freemaps[size], start)
@@ -172,7 +172,7 @@ func (f *HashMap) delSpan(start common.Pgid, size uint64) {
 	f.freePagesCount -= size
 }
 
-func (f *HashMap) mergeSpans(ids common.Pgids) {
+func (f *hashMap) mergeSpans(ids common.Pgids) {
 	common.Verify(func() {
 		ids1Freemap := f.idsFromFreemaps()
 		ids2Forward := f.idsFromForwardMap()
@@ -207,7 +207,7 @@ func (f *HashMap) mergeSpans(ids common.Pgids) {
 }
 
 // mergeWithExistingSpan merges pid to the existing free spans, try to merge it backward and forward
-func (f *HashMap) mergeWithExistingSpan(pid common.Pgid) {
+func (f *hashMap) mergeWithExistingSpan(pid common.Pgid) {
 	prev := pid - 1
 	next := pid + 1
 
@@ -236,7 +236,7 @@ func (f *HashMap) mergeWithExistingSpan(pid common.Pgid) {
 
 // idsFromFreemaps get all free page IDs from f.freemaps.
 // used by test only.
-func (f *HashMap) idsFromFreemaps() map[common.Pgid]struct{} {
+func (f *hashMap) idsFromFreemaps() map[common.Pgid]struct{} {
 	ids := make(map[common.Pgid]struct{})
 	for size, idSet := range f.freemaps {
 		for start := range idSet {
@@ -254,7 +254,7 @@ func (f *HashMap) idsFromFreemaps() map[common.Pgid]struct{} {
 
 // idsFromForwardMap get all free page IDs from f.forwardMap.
 // used by test only.
-func (f *HashMap) idsFromForwardMap() map[common.Pgid]struct{} {
+func (f *hashMap) idsFromForwardMap() map[common.Pgid]struct{} {
 	ids := make(map[common.Pgid]struct{})
 	for start, size := range f.forwardMap {
 		for i := 0; i < int(size); i++ {
@@ -270,7 +270,7 @@ func (f *HashMap) idsFromForwardMap() map[common.Pgid]struct{} {
 
 // idsFromBackwardMap get all free page IDs from f.backwardMap.
 // used by test only.
-func (f *HashMap) idsFromBackwardMap() map[common.Pgid]struct{} {
+func (f *hashMap) idsFromBackwardMap() map[common.Pgid]struct{} {
 	ids := make(map[common.Pgid]struct{})
 	for end, size := range f.backwardMap {
 		for i := 0; i < int(size); i++ {
@@ -284,8 +284,8 @@ func (f *HashMap) idsFromBackwardMap() map[common.Pgid]struct{} {
 	return ids
 }
 
-func NewHashMap() *HashMap {
-	hm := &HashMap{
+func NewHashMapFreelist() Interface {
+	hm := &hashMap{
 		shared: shared{
 			allocs:  make(map[common.Pgid]common.Txid),
 			cache:   make(map[common.Pgid]struct{}),

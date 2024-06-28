@@ -7,7 +7,7 @@ import (
 )
 
 func TestFreelistHashmap_allocate(t *testing.T) {
-	f := NewHashMap()
+	f := NewHashMapFreelist()
 
 	ids := []common.Pgid{3, 4, 5, 6, 7, 9, 12, 13, 18}
 	f.Init(ids)

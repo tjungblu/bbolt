@@ -10,20 +10,20 @@ import (
 
 type Serializable interface {
 	// Read calls Init with the page ids stored in te given page.
-	Read(f Freelist, page *common.Page)
+	Read(f Interface, page *common.Page)
 
 	// Write writes the freelist into the given page.
-	Write(f Freelist, page *common.Page)
+	Write(f Interface, page *common.Page)
 
-	// EstimatedWritePageSize returns the size of the page after serialization in Write.
+	// EstimatedWritePageSize returns the size of the freelist after serialization in Write.
 	// This should never underestimate the size.
-	EstimatedWritePageSize(f Freelist) int
+	EstimatedWritePageSize(f Interface) int
 }
 
 type Serializer struct {
 }
 
-func (s Serializer) Read(f Freelist, p *common.Page) {
+func (s Serializer) Read(f Interface, p *common.Page) {
 	if !p.IsFreelistPage() {
 		panic(fmt.Sprintf("invalid freelist page: %d, page type is %s", p.Id(), p.Typ()))
 	}
@@ -44,7 +44,7 @@ func (s Serializer) Read(f Freelist, p *common.Page) {
 	}
 }
 
-func (s Serializer) EstimatedWritePageSize(f Freelist) int {
+func (s Serializer) EstimatedWritePageSize(f Interface) int {
 	n := f.Count()
 	if n >= 0xFFFF {
 		// The first element will be used to store the count. See freelist.write.
@@ -53,7 +53,7 @@ func (s Serializer) EstimatedWritePageSize(f Freelist) int {
 	return int(common.PageHeaderSize) + (int(unsafe.Sizeof(common.Pgid(0))) * n)
 }
 
-func (s Serializer) Write(f Freelist, p *common.Page) {
+func (s Serializer) Write(f Interface, p *common.Page) {
 	// Combine the old free pgids and pgids waiting on an open transaction.
 
 	// Update the header flag.
