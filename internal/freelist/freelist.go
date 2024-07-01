@@ -6,7 +6,21 @@ import (
 	"go.etcd.io/bbolt/internal/common"
 )
 
+type ReadWriter interface {
+	// Read calls Init with the page ids stored in te given page.
+	Read(page *common.Page)
+
+	// Write writes the freelist into the given page.
+	Write(page *common.Page)
+
+	// EstimatedWritePageSize returns the size of the freelist after serialization in Write.
+	// This should never underestimate the size.
+	EstimatedWritePageSize() int
+}
+
 type Interface interface {
+	ReadWriter
+
 	// Init initializes this freelist with the given list of pages.
 	Init(ids common.Pgids)
 
@@ -58,8 +72,8 @@ func Copyall(f Interface, dst []common.Pgid) {
 }
 
 // Reload reads the freelist from a page and filters out pending items.
-func Reload(s Serializable, f Interface, p *common.Page) {
-	s.Read(f, p)
+func Reload(f Interface, p *common.Page) {
+	f.Read(p)
 	NoSyncReload(f, p.FreelistPageIds())
 }
 

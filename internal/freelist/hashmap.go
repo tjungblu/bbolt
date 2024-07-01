@@ -296,6 +296,6 @@ func NewHashMapFreelist() Interface {
 		backwardMap: make(map[common.Pgid]uint64),
 	}
 	// this loopy reference allows us to share the span merging via interfaces
-	hm.shared.spanMerger = hm
+	hm.shared.sharedInterface = hm
 	return hm
 }

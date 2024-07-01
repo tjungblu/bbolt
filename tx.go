@@ -287,13 +287,13 @@ func (tx *Tx) Commit() (err error) {
 func (tx *Tx) commitFreelist() error {
 	// Allocate new pages for the new free list. This will overestimate
 	// the size of the freelist but not underestimate the size (which would be bad).
-	p, err := tx.allocate((tx.db.freelistSerializer.EstimatedWritePageSize(tx.db.freelist) / tx.db.pageSize) + 1)
+	p, err := tx.allocate((tx.db.freelist.EstimatedWritePageSize() / tx.db.pageSize) + 1)
 	if err != nil {
 		tx.rollback()
 		return err
 	}
 
-	tx.db.freelistSerializer.Write(tx.db.freelist, p)
+	tx.db.freelist.Write(p)
 	tx.meta.SetFreelist(p.Id())
 
 	return nil
@@ -337,7 +337,7 @@ func (tx *Tx) rollback() {
 				fl.NoSyncReload(tx.db.freelist, tx.db.freepages())
 			} else {
 				// Read free page list from freelist page.
-				fl.Reload(tx.db.freelistSerializer, tx.db.freelist, tx.db.page(tx.db.meta().Freelist()))
+				fl.Reload(tx.db.freelist, tx.db.page(tx.db.meta().Freelist()))
 			}
 		}
 	}
@@ -352,7 +352,7 @@ func (tx *Tx) close() {
 		// Grab freelist stats.
 		var freelistFreeN = tx.db.freelist.FreeCount()
 		var freelistPendingN = tx.db.freelist.PendingCount()
-		var freelistAlloc = tx.db.freelistSerializer.EstimatedWritePageSize(tx.db.freelist)
+		var freelistAlloc = tx.db.freelist.EstimatedWritePageSize()
 
 		// Remove transaction ref & writer lock.
 		tx.db.rwtx = nil

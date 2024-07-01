@@ -135,9 +135,8 @@ type DB struct {
 	rwtx     *Tx
 	txs      []*Tx
 
-	freelist           fl.Interface
-	freelistSerializer fl.Serializable
-	freelistLoad       sync.Once
+	freelist     fl.Interface
+	freelistLoad sync.Once
 
 	pagePool sync.Pool
 
@@ -192,7 +191,6 @@ func Open(path string, mode os.FileMode, options *Options) (db *DB, err error) {
 	db.NoFreelistSync = options.NoFreelistSync
 	db.PreLoadFreelist = options.PreLoadFreelist
 	db.FreelistType = options.FreelistType
-	db.freelistSerializer = fl.Serializer{}
 	db.Mlock = options.Mlock
 
 	// Set default values for later DB operations.
@@ -425,7 +423,7 @@ func (db *DB) loadFreelist() {
 			db.freelist.Init(db.freepages())
 		} else {
 			// Read free list from freelist page.
-			db.freelistSerializer.Read(db.freelist, db.page(db.meta().Freelist()))
+			db.freelist.Read(db.page(db.meta().Freelist()))
 		}
 		db.stats.FreePageN = db.freelist.FreeCount()
 		db.stats.PendingPageN = db.freelist.PendingCount()

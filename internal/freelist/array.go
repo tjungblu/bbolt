@@ -111,6 +111,6 @@ func NewArrayFreelist() Interface {
 		},
 	}
 	// this loopy reference allows us to share the span merging via interfaces
-	a.shared.spanMerger = a
+	a.shared.sharedInterface = a
 	return a
 }

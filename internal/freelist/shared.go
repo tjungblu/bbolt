@@ -2,11 +2,19 @@ package freelist
 
 import (
 	"fmt"
+	"sort"
+	"unsafe"
 
 	"go.etcd.io/bbolt/internal/common"
 )
 
-type spanMerger interface {
+type sharedInterface interface {
+	// Init initializes this freelist with the given list of pages.
+	Init(ids common.Pgids)
+	// Count returns the number of free and pending pages.
+	Count() int
+	// FreePageIds returns all free pages.
+	FreePageIds() common.Pgids
 	// mergeSpans is merging the given pages into the freelist
 	mergeSpans(ids common.Pgids)
 }
@@ -18,7 +26,7 @@ type txPending struct {
 }
 
 type shared struct {
-	spanMerger
+	sharedInterface
 
 	allocs  map[common.Pgid]common.Txid // mapping of Txid that allocated a pgid.
 	cache   map[common.Pgid]struct{}    // fast lookup of all free and pending page ids.
@@ -96,7 +104,7 @@ func (t *shared) Rollback(txid common.Txid) {
 	}
 	// Remove pages from pending list and mark as free if allocated by txid.
 	delete(t.pending, txid)
-	t.spanMerger.mergeSpans(m)
+	t.sharedInterface.mergeSpans(m)
 }
 
 func (t *shared) Release(txid common.Txid) {
@@ -142,6 +150,72 @@ func (t *shared) ReleaseRange(begin, end common.Txid) {
 		}
 	}
 	t.mergeSpans(m)
+}
+
+func (t *shared) Read(p *common.Page) {
+	if !p.IsFreelistPage() {
+		panic(fmt.Sprintf("invalid freelist page: %d, page type is %s", p.Id(), p.Typ()))
+	}
+
+	ids := p.FreelistPageIds()
+
+	// Copy the list of page ids from the freelist.
+	if len(ids) == 0 {
+		t.Init(nil)
+	} else {
+		// copy the ids, so we don't modify on the freelist page directly
+		idsCopy := make([]common.Pgid, len(ids))
+		copy(idsCopy, ids)
+		// Make sure they're sorted.
+		sort.Sort(common.Pgids(idsCopy))
+
+		t.Init(idsCopy)
+	}
+}
+
+func (t *shared) EstimatedWritePageSize() int {
+	n := t.Count()
+	if n >= 0xFFFF {
+		// The first element will be used to store the count. See freelist.write.
+		n++
+	}
+	return int(common.PageHeaderSize) + (int(unsafe.Sizeof(common.Pgid(0))) * n)
+}
+
+func (t *shared) Write(p *common.Page) {
+	// Combine the old free pgids and pgids waiting on an open transaction.
+
+	// Update the header flag.
+	p.SetFlags(common.FreelistPageFlag)
+
+	// The page.count can only hold up to 64k elements so if we overflow that
+	// number then we handle it by putting the size in the first element.
+	l := t.Count()
+	if l == 0 {
+		p.SetCount(uint16(l))
+	} else if l < 0xFFFF {
+		p.SetCount(uint16(l))
+		data := common.UnsafeAdd(unsafe.Pointer(p), unsafe.Sizeof(*p))
+		ids := unsafe.Slice((*common.Pgid)(data), l)
+		t.copyall(ids)
+	} else {
+		p.SetCount(0xFFFF)
+		data := common.UnsafeAdd(unsafe.Pointer(p), unsafe.Sizeof(*p))
+		ids := unsafe.Slice((*common.Pgid)(data), l+1)
+		ids[0] = common.Pgid(l)
+		t.copyall(ids[1:])
+	}
+}
+
+// Copyall copies a list of all free ids and all pending ids in one sorted list.
+// f.count returns the minimum length required for dst.
+func (t *shared) copyall(dst []common.Pgid) {
+	m := make(common.Pgids, 0, t.PendingCount())
+	for _, txp := range t.pendingPageIds() {
+		m = append(m, txp.ids...)
+	}
+	sort.Sort(m)
+	common.Mergepgids(dst, t.FreePageIds(), m)
 }
 
 // reindex rebuilds the free cache based on available and pending free lists.
