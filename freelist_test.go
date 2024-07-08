@@ -1,6 +1,7 @@
 package bbolt
 
 import (
+	"github.com/stretchr/testify/require"
 	"math/rand"
 	"os"
 	"reflect"
@@ -177,6 +178,51 @@ func TestFreelist_releaseRange(t *testing.T) {
 			t.Errorf("exp=%v; got=%v for %s", exp, f.getFreePageIDs(), c.title)
 		}
 	}
+}
+
+func TestRollbackCacheInconsistency(t *testing.T) {
+	f := newTestFreelist()
+	f.free(common.Txid(1), common.NewPage(13, common.LeafPageFlag, 0, 3))
+	requirePages(t, f, nil, common.Pgids{13, 14, 15, 16})
+	f.freePages()
+	requirePages(t, f, common.Pgids{13, 14, 15, 16}, common.Pgids{})
+
+	// allocate a sub-span in TX=2
+	allocate := f.allocate(common.Txid(2), 2)
+	require.NotEqual(t, 0, allocate)
+	// changed my mind, giving it back again
+	f.free(common.Txid(2), common.NewPage(allocate, common.LeafPageFlag, 0, 1))
+	requirePages(t, f, common.Pgids{15, 16}, common.Pgids{13, 14})
+	// changed my mind again, rolling back the entire transaction
+	f.rollback(common.Txid(2))
+	// FIXME this shows an inconsistency in ids and cache map
+	requirePages(t, f, common.Pgids{13, 14, 15, 16}, common.Pgids{})
+	// ids = {[]common.Pgid} 13 14 15 16
+	// cache = {map[common.Pgid]struct{}} { 15 -> , 16 -> }
+}
+
+func requirePages(t *testing.T, f *freelist, freePageIds []common.Pgid, pendingPageIds common.Pgids) {
+	require.Equal(t, f.free_count()+f.pending_count(), f.count())
+	require.Equalf(t, freePageIds, f.getFreePageIDs(), "unexpected free pages")
+	require.Equal(t, len(freePageIds), f.free_count())
+	pp := allPendingPages(f.pending)
+	require.Equalf(t, pendingPageIds, pp, "unexpected pending pages")
+	require.Equal(t, len(pp), f.pending_count())
+	for _, pgid := range f.getFreePageIDs() {
+		require.Truef(t, f.freed(pgid), "expected free page to return true on Freed")
+	}
+	for _, pgid := range pp {
+		require.Truef(t, f.freed(pgid), "expected pending page to return true on Freed")
+	}
+}
+
+func allPendingPages(p map[common.Txid]*txPending) common.Pgids {
+	pgids := common.Pgids{}
+	for _, pending := range p {
+		pgids = append(pgids, pending.ids...)
+	}
+	sort.Sort(pgids)
+	return pgids
 }
 
 func TestFreelistHashmap_allocate(t *testing.T) {
