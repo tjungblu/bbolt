@@ -303,6 +303,28 @@ func TestFreelist_write(t *testing.T) {
 	}
 }
 
+func TestFreeList_reload_page_dedupe(t *testing.T) {
+	var buf [4096]byte
+	f := newTestFreelist()
+	f.readIDs([]common.Pgid{5, 6, 8})
+
+	p := (*common.Page)(unsafe.Pointer(&buf[0]))
+	if err := f.write(p); err != nil {
+		t.Fatal(err)
+	}
+
+	f2 := newTestFreelist()
+	// this should deduplicate as a pending page when reading from p's freelist
+	f2.free(common.Txid(5), common.NewPage(5, common.LeafPageFlag, 0, 4))
+	f2.reload(p)
+	if len(f2.getFreePageIDs()) != 0 {
+		t.Fatalf("expected empty; got=%v", f2.getFreePageIDs())
+	}
+	if exp := []common.Pgid{5, 6, 7, 8, 9}; !reflect.DeepEqual(exp, f2.pending[5].ids) {
+		t.Fatalf("exp=%v; got=%v", exp, f2.pending[5].ids)
+	}
+}
+
 func Benchmark_FreelistRelease10K(b *testing.B)    { benchmark_FreelistRelease(b, 10000) }
 func Benchmark_FreelistRelease100K(b *testing.B)   { benchmark_FreelistRelease(b, 100000) }
 func Benchmark_FreelistRelease1000K(b *testing.B)  { benchmark_FreelistRelease(b, 1000000) }
