@@ -10,14 +10,14 @@ import (
 // node represents an in-memory, deserialized page.
 type node struct {
 	bucket     *Bucket
+	parent     *node
+	key        []byte
+	children   nodes
+	inodes     inodes
+	pgid       pgid
 	isLeaf     bool
 	unbalanced bool
 	spilled    bool
-	key        []byte
-	pgid       pgid
-	parent     *node
-	children   nodes
-	inodes     inodes
 }
 
 // root returns the top-level node this node is attached to.
@@ -601,10 +601,10 @@ func (s nodes) Less(i, j int) bool {
 // It can be used to point to elements in a page or point
 // to an element which hasn't been added to a page yet.
 type inode struct {
-	flags uint32
-	pgid  pgid
 	key   []byte
 	value []byte
+	pgid  pgid
+	flags uint32
 }
 
 type inodes []inode

@@ -143,8 +143,8 @@ func (n *leafPageElement) value() []byte {
 
 // PageInfo represents human readable information about a page.
 type PageInfo struct {
-	ID            int
 	Type          string
+	ID            int
 	Count         int
 	OverflowCount int
 }

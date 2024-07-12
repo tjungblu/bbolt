@@ -20,8 +20,6 @@ type pidSet map[pgid]struct{}
 // freelist represents a list of all pages that are available for allocation.
 // It also tracks pages that have been freed but are still in use by open transactions.
 type freelist struct {
-	freelistType   FreelistType                // freelist type
-	ids            []pgid                      // all free and available free page ids.
 	allocs         map[pgid]txid               // mapping of txid that allocated a pgid.
 	pending        map[txid]*txPending         // mapping of soon-to-be free page ids by tx.
 	cache          map[pgid]struct{}           // fast lookup of all free and pending page ids.
@@ -33,6 +31,8 @@ type freelist struct {
 	mergeSpans     func(ids pgids)             // the mergeSpan func
 	getFreePageIDs func() []pgid               // get free pgids func
 	readIDs        func(pgids []pgid)          // readIDs func reads list of pages and init the freelist
+	freelistType   FreelistType                // freelist type
+	ids            []pgid                      // all free and available free page ids.
 }
 
 // newFreelist returns an empty, initialized freelist.
