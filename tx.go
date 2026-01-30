@@ -8,12 +8,32 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
 	berrors "go.etcd.io/bbolt/errors"
 	"go.etcd.io/bbolt/internal/common"
+)
+
+// ChangeOp represents a single change operation during compaction.
+type ChangeOp struct {
+	OpType   ChangeOpType
+	KeyPath  [][]byte // Full path to the key (bucket hierarchy)
+	Key      []byte   // The key itself
+	Value    []byte   // Value for Put operations, nil for Delete
+	Sequence uint64   // Sequence number for bucket operations
+}
+
+// ChangeOpType represents the type of change operation.
+type ChangeOpType uint8
+
+const (
+	ChangeOpPut ChangeOpType = iota
+	ChangeOpDelete
+	ChangeOpCreateBucket
+	ChangeOpDeleteBucket
 )
 
 // Tx represents a read-only or read/write transaction on the database.
@@ -27,6 +47,7 @@ import (
 type Tx struct {
 	writable       bool
 	managed        bool
+	compaction     bool // True if this is a compaction transaction
 	db             *DB
 	meta           *common.Meta
 	root           Bucket
@@ -41,6 +62,11 @@ type Tx struct {
 	// workloads. For databases that are much larger than available RAM,
 	// set the flag to syscall.O_DIRECT to avoid trashing the page cache.
 	WriteFlag int
+
+	// Change log for compaction transactions. Tracks all modifications
+	// that occur during compaction so they can be applied to the compacted result.
+	changeLog []ChangeOp
+	changeMu  sync.Mutex // Protects changeLog access
 }
 
 // init initializes the transaction.
@@ -85,6 +111,53 @@ func (tx *Tx) Size() int64 {
 // Writable returns whether the transaction can perform write operations.
 func (tx *Tx) Writable() bool {
 	return tx.writable
+}
+
+// IsCompaction returns whether this is a compaction transaction.
+func (tx *Tx) IsCompaction() bool {
+	return tx.compaction
+}
+
+// recordChange records a change operation in the change log for compaction transactions.
+func (tx *Tx) recordChange(opType ChangeOpType, keyPath [][]byte, key []byte, value []byte, seq uint64) {
+	if !tx.compaction {
+		return
+	}
+
+	tx.changeMu.Lock()
+	defer tx.changeMu.Unlock()
+
+	// Clone the key path to avoid issues with concurrent modifications.
+	clonedKeyPath := make([][]byte, len(keyPath))
+	for i, k := range keyPath {
+		clonedKeyPath[i] = cloneBytes(k)
+	}
+
+	op := ChangeOp{
+		OpType:   opType,
+		KeyPath:  clonedKeyPath,
+		Key:      cloneBytes(key),
+		Value:    cloneBytes(value),
+		Sequence: seq,
+	}
+
+	tx.changeLog = append(tx.changeLog, op)
+}
+
+// GetChangeLog returns a copy of the change log for this compaction transaction.
+// Returns nil if this is not a compaction transaction.
+func (tx *Tx) GetChangeLog() []ChangeOp {
+	if !tx.compaction {
+		return nil
+	}
+
+	tx.changeMu.Lock()
+	defer tx.changeMu.Unlock()
+
+	// Return a copy of the change log.
+	result := make([]ChangeOp, len(tx.changeLog))
+	copy(result, tx.changeLog)
+	return result
 }
 
 // Cursor creates a cursor associated with the root bucket.
@@ -375,6 +448,7 @@ func (tx *Tx) close() {
 	tx.meta = nil
 	tx.root = Bucket{tx: tx}
 	tx.pages = nil
+	tx.changeLog = nil
 }
 
 // Copy writes the entire database to a writer.

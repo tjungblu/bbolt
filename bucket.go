@@ -196,6 +196,16 @@ func (b *Bucket) CreateBucket(key []byte) (rb *Bucket, err error) {
 	// to be treated as a regular, non-inline bucket for the rest of the tx.
 	b.page = nil
 
+	// Record change for active compaction transactions if this is a root bucket operation.
+	if b.tx.db != nil && b == &b.tx.root {
+		bkt := b.Bucket(newKey)
+		var seq uint64
+		if bkt != nil {
+			seq = bkt.Sequence()
+		}
+		b.tx.db.recordChangeForCompaction(ChangeOpCreateBucket, nil, newKey, nil, seq)
+	}
+
 	return b.Bucket(newKey), nil
 }
 
@@ -324,6 +334,11 @@ func (b *Bucket) DeleteBucket(key []byte) (err error) {
 	// Delete the node if we have a matching key.
 	c.node().del(newKey)
 
+	// Record change for active compaction transactions if this is a root bucket operation.
+	if b.tx.db != nil && b == &b.tx.root {
+		b.tx.db.recordChangeForCompaction(ChangeOpDeleteBucket, nil, newKey, nil, 0)
+	}
+
 	return nil
 }
 
@@ -352,8 +367,8 @@ func (b *Bucket) MoveBucket(key []byte, dstBucket *Bucket) (err error) {
 		return errors.ErrTxNotWritable
 	}
 
-	if b.tx.db.Path() != dstBucket.tx.db.Path() || b.tx != dstBucket.tx {
-		lg.Errorf("The source and target buckets are not in the same db file, source bucket in %s and target bucket in %s", b.tx.db.Path(), dstBucket.tx.db.Path())
+	if b.tx.db.path != dstBucket.tx.db.path || b.tx != dstBucket.tx {
+		lg.Errorf("The source and target buckets are not in the same db file, source bucket in %s and target bucket in %s", b.tx.db.path, dstBucket.tx.db.path)
 		return errors.ErrDifferentDB
 	}
 
@@ -490,6 +505,12 @@ func (b *Bucket) Put(key []byte, value []byte) (err error) {
 
 	c.node().put(newKey, newKey, value, 0, 0)
 
+	// Record change for active compaction transactions if this is a root bucket operation.
+	// For nested buckets, the key path would need to be tracked, which can be added in future iterations.
+	if b.tx.db != nil && b == &b.tx.root {
+		b.tx.db.recordChangeForCompaction(ChangeOpPut, nil, newKey, value, 0)
+	}
+
 	return nil
 }
 
@@ -530,6 +551,11 @@ func (b *Bucket) Delete(key []byte) (err error) {
 
 	// Delete the node if we have a matching key.
 	c.node().del(key)
+
+	// Record change for active compaction transactions if this is a root bucket operation.
+	if b.tx.db != nil && b == &b.tx.root {
+		b.tx.db.recordChangeForCompaction(ChangeOpDelete, nil, key, nil, 0)
+	}
 
 	return nil
 }

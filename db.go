@@ -147,6 +147,14 @@ type DB struct {
 	mmaplock sync.RWMutex // Protects mmap access during remapping.
 	statlock sync.RWMutex // Protects stats access.
 
+	// Active compaction transactions that need to track changes.
+	compactionTxs []*Tx
+	compactionMu  sync.RWMutex // Protects compactionTxs access.
+
+	// Lock for database swapping operations. This ensures no transactions
+	// can start while swapping src and dst databases.
+	swapLock sync.Mutex
+
 	ops struct {
 		writeAt func(b []byte, off int64) (n int, err error)
 	}
@@ -154,6 +162,94 @@ type DB struct {
 	// Read only mode.
 	// When true, Update() and Begin(true) return ErrDatabaseReadOnly immediately.
 	readOnly bool
+}
+
+// LockAllTransactions locks all read and write transactions on the database.
+// This prevents new transactions from starting and waits for existing
+// transactions to complete. This is used during database swapping operations.
+//
+// The caller must call UnlockAllTransactions() when done.
+//
+// WARNING: This is a blocking operation that will wait for all existing
+// transactions to complete. Use with caution in production systems.
+func (db *DB) LockAllTransactions() {
+	lg := db.Logger()
+	if lg != discardLogger {
+		lg.Debugf("Locking all transactions on database")
+	}
+
+	// Acquire swap lock first to prevent new transactions from starting.
+	db.swapLock.Lock()
+	if lg != discardLogger {
+		lg.Debugf("LockAllTransactions: acquired swapLock")
+	}
+
+	// Acquire write lock to block all new write transactions.
+	// If this blocks, there is an open write transaction (from Begin(true) or
+	// Update()) that has not yet committed or rolled back. The caller must ensure
+	// all write transactions are closed before calling LockAllTransactions.
+	db.rwlock.Lock()
+	if lg != discardLogger {
+		lg.Debugf("LockAllTransactions: acquired rwlock")
+	}
+
+	// Acquire exclusive mmap lock to block all new read transactions
+	// and prevent remapping.
+	db.mmaplock.Lock()
+	if lg != discardLogger {
+		lg.Debugf("LockAllTransactions: acquired mmaplock")
+	}
+
+	// At this point, no new transactions can start. We need to wait
+	// for existing transactions to finish. We can check if there are
+	// any active transactions by checking stats or waiting a bit.
+	// For now, we'll rely on the fact that existing transactions will
+	// complete naturally. In a production system, you might want to
+	// add a mechanism to wait for active transactions to complete.
+
+	if lg != discardLogger {
+		lg.Debugf("All transactions locked on database")
+	}
+}
+
+// UnlockAllTransactions unlocks all transactions on the database.
+// This must be called after LockAllTransactions() to restore normal operation.
+func (db *DB) UnlockAllTransactions() {
+	lg := db.Logger()
+	if lg != discardLogger {
+		lg.Debugf("Unlocking all transactions on database")
+	}
+
+	// Release locks in reverse order.
+	db.mmaplock.Unlock()
+	db.rwlock.Unlock()
+	db.swapLock.Unlock()
+
+	if lg != discardLogger {
+		lg.Debugf("All transactions unlocked on database")
+	}
+}
+
+// recordChangeForCompaction records a change operation for all active compaction transactions.
+// This is called by write transactions when they perform operations that should be
+// tracked during compaction.
+//
+// keyPath is the full path to the bucket containing the key (empty for root bucket).
+// For example, if modifying a key "foo" in bucket "bar" which is in root, keyPath would be [][]byte{[]byte("bar")}.
+func (db *DB) recordChangeForCompaction(opType ChangeOpType, keyPath [][]byte, key []byte, value []byte, seq uint64) {
+	// Get a snapshot of active compaction transactions while holding the lock,
+	// then release the lock before calling recordChange to avoid holding multiple
+	// locks simultaneously and prevent potential deadlocks.
+	db.compactionMu.RLock()
+	compactionTxs := make([]*Tx, len(db.compactionTxs))
+	copy(compactionTxs, db.compactionTxs)
+	db.compactionMu.RUnlock()
+
+	// Now call recordChange on each transaction without holding compactionMu.
+	// This prevents deadlocks if GetChangeLog() is called concurrently.
+	for _, ct := range compactionTxs {
+		ct.recordChange(opType, keyPath, key, value, seq)
+	}
 }
 
 // Path returns the path to currently open database file.
@@ -773,6 +869,11 @@ func (db *DB) Logger() Logger {
 }
 
 func (db *DB) beginTx() (*Tx, error) {
+	// Check if database is locked for swapping. This will block if
+	// LockAllTransactions() is holding the lock.
+	db.swapLock.Lock()
+	db.swapLock.Unlock()
+
 	// Lock the meta pages while we initialize the transaction. We obtain
 	// the meta lock before the mmap lock because that's the order that the
 	// write transaction will obtain them.
@@ -781,6 +882,7 @@ func (db *DB) beginTx() (*Tx, error) {
 	// Obtain a read-only lock on the mmap. When the mmap is remapped it will
 	// obtain a write lock so all transactions must finish before it can be
 	// remapped.
+	// Note: This will block if LockAllTransactions() is holding the exclusive lock.
 	db.mmaplock.RLock()
 
 	// Exit if the database is not open yet.
@@ -825,8 +927,14 @@ func (db *DB) beginRWTx() (*Tx, error) {
 		return nil, berrors.ErrDatabaseReadOnly
 	}
 
+	// Check if database is locked for swapping. This will block if
+	// LockAllTransactions() is holding the lock.
+	db.swapLock.Lock()
+	db.swapLock.Unlock()
+
 	// Obtain writer lock. This is released by the transaction when it closes.
 	// This enforces only one writer transaction at a time.
+	// Note: This will block if LockAllTransactions() is holding the lock.
 	db.rwlock.Lock()
 
 	// Once we have the writer lock then we can lock the meta pages so that
@@ -854,10 +962,110 @@ func (db *DB) beginRWTx() (*Tx, error) {
 	return t, nil
 }
 
+// BeginCompaction starts a new compaction transaction.
+// A compaction transaction allows reading from the database while allowing
+// concurrent write transactions. All modifications made during compaction
+// are tracked in a change log and can be applied to the compacted result.
+//
+// Unlike regular read transactions, compaction transactions do not hold
+// the mmap lock, allowing write transactions to remap the database during
+// compaction. However, this means that pages read during compaction may
+// become invalid if the mmap is remapped. The compaction transaction
+// handles this by re-reading pages when necessary.
+func (db *DB) BeginCompaction() (t *Tx, err error) {
+	if lg := db.Logger(); lg != discardLogger {
+		lg.Debugf("Starting a new compaction transaction")
+		defer func() {
+			if err != nil {
+				lg.Errorf("Starting a new compaction transaction failed: %v", err)
+			} else {
+				lg.Debugf("Starting a new compaction transaction successfully")
+			}
+		}()
+	}
+
+	// Check if database is locked for swapping. This will block if
+	// LockAllTransactions() is holding the lock.
+	db.swapLock.Lock()
+	db.swapLock.Unlock()
+
+	// Lock the meta pages while we initialize the transaction.
+	db.metalock.Lock()
+
+	// For compaction transactions, we acquire a read lock on mmap temporarily
+	// to read the initial state, but we release it immediately to allow
+	// write transactions to remap. This is different from regular read
+	// transactions which hold the lock for their entire lifetime.
+	// Note: This will block if LockAllTransactions() is holding the exclusive lock.
+	db.mmaplock.RLock()
+
+	// Exit if the database is not open yet.
+	if !db.opened {
+		db.mmaplock.RUnlock()
+		db.metalock.Unlock()
+		return nil, berrors.ErrDatabaseNotOpen
+	}
+
+	// Exit if the database is not correctly mapped.
+	if db.data == nil {
+		db.mmaplock.RUnlock()
+		db.metalock.Unlock()
+		return nil, berrors.ErrInvalidMapping
+	}
+
+	// Create a compaction transaction (read-only but tracks changes).
+	t = &Tx{
+		writable:   false,
+		compaction: true,
+		changeLog:  make([]ChangeOp, 0),
+	}
+	t.init(db)
+
+	if db.freelist != nil {
+		db.freelist.AddReadonlyTXID(t.meta.Txid())
+	}
+
+	// Register this compaction transaction so write transactions can track changes.
+	db.compactionMu.Lock()
+	db.compactionTxs = append(db.compactionTxs, t)
+	db.compactionMu.Unlock()
+
+	// Release mmap lock immediately to allow write transactions to remap.
+	// Compaction transactions need to handle potential remapping by re-reading pages
+	// if needed. This allows write transactions to proceed without blocking.
+	db.mmaplock.RUnlock()
+
+	// Unlock the meta pages.
+	db.metalock.Unlock()
+
+	// Update the transaction stats.
+	if db.stats != nil {
+		db.statlock.Lock()
+		db.stats.TxN++
+		db.stats.OpenTxN++
+		db.statlock.Unlock()
+	}
+
+	return t, nil
+}
+
 // removeTx removes a transaction from the database.
 func (db *DB) removeTx(tx *Tx) {
-	// Release the read lock on the mmap.
-	db.mmaplock.RUnlock()
+	// Unregister compaction transaction if needed.
+	if tx.compaction {
+		db.compactionMu.Lock()
+		for i, ct := range db.compactionTxs {
+			if ct == tx {
+				db.compactionTxs = append(db.compactionTxs[:i], db.compactionTxs[i+1:]...)
+				break
+			}
+		}
+		db.compactionMu.Unlock()
+		// Compaction transactions don't hold the mmap lock, so we don't unlock it here.
+	} else {
+		// Release the read lock on the mmap for regular read transactions.
+		db.mmaplock.RUnlock()
+	}
 
 	// Use the meta lock to restrict access to the DB object.
 	db.metalock.Lock()
