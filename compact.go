@@ -26,7 +26,7 @@ func Compact(dst, src *DB, txMaxSize int64) error {
 // will be applied to the compacted result after the initial compaction is complete.
 //
 // If changes is nil or empty, this function behaves identically to Compact().
-func CompactWithChanges(dst, src *DB, txMaxSize int64, changes []ChangeOp) error {
+func CompactWithChanges(dst, src *DB, txMaxSize int64, changes []ChangeOp) (err error) {
 	// commit regularly, or we'll run out of memory for large datasets if using one transaction.
 	var size int64
 	tx, err := dst.Begin(true)
@@ -34,15 +34,16 @@ func CompactWithChanges(dst, src *DB, txMaxSize int64, changes []ChangeOp) error
 		return err
 	}
 	// Note: We don't use defer for tx because it gets reassigned during the loop.
-	// We'll manually rollback if there's an error, or commit at the end.
+	// We'll manually roll back if there's an error, or commit at the end.
 
 	// Use compaction transaction for source database to allow concurrent writes.
 	compactionTx, err := src.BeginCompaction()
 	if err != nil {
-		tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
-	defer compactionTx.Rollback()
+	defer func() {
+		err = errors.Join(err, compactionTx.Rollback())
+	}()
 
 	// Walk the source database using the compaction transaction.
 	if err := walkWithTx(compactionTx, func(keys [][]byte, k, v []byte, seq uint64) error {
@@ -120,8 +121,7 @@ func CompactWithChanges(dst, src *DB, txMaxSize int64, changes []ChangeOp) error
 		return b.Put(k, v)
 	}); err != nil {
 		// Rollback transaction on error.
-		tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
 
 	// Get any changes that were tracked during compaction.
