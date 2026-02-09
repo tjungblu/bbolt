@@ -3,7 +3,9 @@ package bbolt_test
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,15 +17,16 @@ import (
 func TestCompactWithChanges(t *testing.T) {
 	// Create source database with some data
 	srcDB := btesting.MustCreateDB(t)
-	defer srcDB.Close()
-
+	defer func() {
+		require.NoError(t, srcDB.Close())
+	}()
 	// Fill source database
 	err := srcDB.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte("test"))
 		if err != nil {
 			return err
 		}
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10000; i++ {
 			key := []byte(fmt.Sprintf("key%d", i))
 			value := []byte(fmt.Sprintf("value%d", i))
 			if err := b.Put(key, value); err != nil {
@@ -38,8 +41,9 @@ func TestCompactWithChanges(t *testing.T) {
 	dstPath := filepath.Join(t.TempDir(), "dst.db")
 	dstDB, err := bolt.Open(dstPath, 0600, nil)
 	require.NoError(t, err)
-	defer dstDB.Close()
-
+	defer func() {
+		require.NoError(t, dstDB.Close())
+	}()
 	// Perform compaction
 	err = bolt.CompactWithChanges(dstDB, srcDB.DB, 0, nil)
 	require.NoError(t, err)
@@ -48,7 +52,7 @@ func TestCompactWithChanges(t *testing.T) {
 	err = dstDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("test"))
 		require.NotNil(t, b)
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10000; i++ {
 			key := []byte(fmt.Sprintf("key%d", i))
 			expectedValue := []byte(fmt.Sprintf("value%d", i))
 			value := b.Get(key)
@@ -70,7 +74,7 @@ func TestCompactAndSwap(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for i := 0; i < 50; i++ {
+		for i := 0; i < 5000; i++ {
 			key := []byte(fmt.Sprintf("key%d", i))
 			value := []byte(fmt.Sprintf("value%d", i))
 			if err := b.Put(key, value); err != nil {
@@ -91,7 +95,7 @@ func TestCompactAndSwap(t *testing.T) {
 	err = newDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("test"))
 		require.NotNil(t, b)
-		for i := 0; i < 50; i++ {
+		for i := 0; i < 5000; i++ {
 			key := []byte(fmt.Sprintf("key%d", i))
 			expectedValue := []byte(fmt.Sprintf("value%d", i))
 			value := b.Get(key)
@@ -106,7 +110,9 @@ func TestCompactAndSwap(t *testing.T) {
 func TestCompactionTransaction(t *testing.T) {
 	// Create source database
 	srcDB := btesting.MustCreateDB(t)
-	defer srcDB.Close()
+	defer func() {
+		require.NoError(t, srcDB.Close())
+	}()
 
 	// Fill with data
 	err := srcDB.Update(func(tx *bolt.Tx) error {
@@ -114,7 +120,7 @@ func TestCompactionTransaction(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for i := 0; i < 20; i++ {
+		for i := 0; i < 2000; i++ {
 			key := []byte(fmt.Sprintf("key%d", i))
 			value := []byte(fmt.Sprintf("value%d", i))
 			if err := b.Put(key, value); err != nil {
@@ -128,7 +134,9 @@ func TestCompactionTransaction(t *testing.T) {
 	// Start compaction transaction
 	compactionTx, err := srcDB.DB.BeginCompaction()
 	require.NoError(t, err)
-	defer compactionTx.Rollback()
+	defer func() {
+		require.NoError(t, compactionTx.Rollback())
+	}()
 
 	// Verify we can read from compaction transaction
 	err = compactionTx.ForEach(func(name []byte, b *bolt.Bucket) error {
@@ -155,7 +163,9 @@ func TestCompactionTransaction(t *testing.T) {
 func TestCompactMultipleBuckets(t *testing.T) {
 	// Create source database
 	srcDB := btesting.MustCreateDB(t)
-	defer srcDB.Close()
+	defer func() {
+		require.NoError(t, srcDB.Close())
+	}()
 
 	// Create multiple buckets with data
 	err := srcDB.Update(func(tx *bolt.Tx) error {
@@ -165,7 +175,7 @@ func TestCompactMultipleBuckets(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			for i := 0; i < 10; i++ {
+			for i := 0; i < 1000; i++ {
 				key := []byte(fmt.Sprintf("key%d", i))
 				value := []byte(fmt.Sprintf("value%d", i))
 				if err := b.Put(key, value); err != nil {
@@ -181,8 +191,9 @@ func TestCompactMultipleBuckets(t *testing.T) {
 	dstPath := filepath.Join(t.TempDir(), "dst.db")
 	dstDB, err := bolt.Open(dstPath, 0600, nil)
 	require.NoError(t, err)
-	defer dstDB.Close()
-
+	defer func() {
+		require.NoError(t, dstDB.Close())
+	}()
 	// Perform compaction
 	err = bolt.CompactWithChanges(dstDB, srcDB.DB, 0, nil)
 	require.NoError(t, err)
@@ -193,7 +204,7 @@ func TestCompactMultipleBuckets(t *testing.T) {
 			bucketName := []byte(fmt.Sprintf("bucket%d", bucketNum))
 			b := tx.Bucket(bucketName)
 			require.NotNil(t, b, "bucket %d should exist", bucketNum)
-			for i := 0; i < 10; i++ {
+			for i := 0; i < 1000; i++ {
 				key := []byte(fmt.Sprintf("key%d", i))
 				expectedValue := []byte(fmt.Sprintf("value%d", i))
 				value := b.Get(key)
@@ -209,7 +220,9 @@ func TestCompactMultipleBuckets(t *testing.T) {
 func TestCompactNestedBuckets(t *testing.T) {
 	// Create source database
 	srcDB := btesting.MustCreateDB(t)
-	defer srcDB.Close()
+	defer func() {
+		require.NoError(t, srcDB.Close())
+	}()
 
 	// Create nested buckets
 	err := srcDB.Update(func(tx *bolt.Tx) error {
@@ -237,7 +250,9 @@ func TestCompactNestedBuckets(t *testing.T) {
 	dstPath := filepath.Join(t.TempDir(), "dst.db")
 	dstDB, err := bolt.Open(dstPath, 0600, nil)
 	require.NoError(t, err)
-	defer dstDB.Close()
+	defer func() {
+		require.NoError(t, dstDB.Close())
+	}()
 
 	// Perform compaction
 	err = bolt.CompactWithChanges(dstDB, srcDB.DB, 0, nil)
@@ -255,6 +270,111 @@ func TestCompactNestedBuckets(t *testing.T) {
 			value := child.Get(key)
 			require.Equal(t, expectedValue, value, "key %d mismatch", i)
 			parent = child
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+// TestCompactConcurrentWrites runs writers under distinct prefixes while compaction
+// is in progress, then stops writers gracefully and asserts the source DB contains
+// every prefix and all integers written up to the stop signal.
+func TestCompactConcurrentWrites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
+	const numWriters = 5
+	const runDuration = 5 * time.Second
+	const throttle = 1 * time.Millisecond
+
+	srcDB := btesting.MustCreateDB(t)
+	defer func() {
+		require.NoError(t, srcDB.Close())
+	}()
+
+	dstPath := filepath.Join(t.TempDir(), "dst.db")
+	dstDB, err := bolt.Open(dstPath, 0600, nil)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, dstDB.Close())
+	}()
+
+	// Ensure "data" bucket exists so writers can use it
+	err = srcDB.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte("data"))
+		return err
+	})
+	require.NoError(t, err)
+
+	stopCh := make(chan struct{})
+	writerCounts := make([]int, numWriters)
+	var writerCountsMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for id := 0; id < numWriters; id++ {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prefix := fmt.Sprintf("writer%d", id)
+			count := 0
+			for {
+				select {
+				case <-stopCh:
+					writerCountsMu.Lock()
+					writerCounts[id] = count
+					writerCountsMu.Unlock()
+					return
+				default:
+				}
+				err := srcDB.Update(func(tx *bolt.Tx) error {
+					b := tx.Bucket([]byte("data"))
+					key := []byte(fmt.Sprintf("%s-%d", prefix, count))
+					value := []byte(fmt.Sprintf("%d", count))
+					return b.Put(key, value)
+				})
+				if err != nil {
+					writerCountsMu.Lock()
+					writerCounts[id] = count
+					writerCountsMu.Unlock()
+					return
+				}
+				count++
+				time.Sleep(throttle)
+			}
+		}()
+	}
+
+	// Start compaction after a short delay so some writes happen first
+	time.Sleep(30 * time.Millisecond)
+	compactionDone := make(chan struct{})
+	var compactionErr error
+	go func() {
+		compactionErr = bolt.CompactWithChanges(dstDB, srcDB.DB, 0, nil)
+		close(compactionDone)
+	}()
+
+	// Let writers and compaction run together
+	time.Sleep(runDuration)
+	close(stopCh)
+	wg.Wait()
+	<-compactionDone
+	require.NoError(t, compactionErr)
+
+	// Assert source DB has each writer's prefix and all integers 0..count-1
+	err = srcDB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("data"))
+		require.NotNil(t, b)
+		for id := 0; id < numWriters; id++ {
+			prefix := fmt.Sprintf("writer%d", id)
+			expectedCount := writerCounts[id]
+			for i := 0; i < expectedCount; i++ {
+				key := []byte(fmt.Sprintf("%s-%d", prefix, i))
+				value := b.Get(key)
+				expectedValue := []byte(fmt.Sprintf("%d", i))
+				require.Equal(t, expectedValue, value, "prefix %s key %d", prefix, i)
+			}
 		}
 		return nil
 	})
